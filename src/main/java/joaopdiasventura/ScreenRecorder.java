@@ -7,11 +7,16 @@ import java.awt.Toolkit;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorConvertOp;
 import java.io.File;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.ShortBuffer;
 import java.util.Objects;
 import java.util.Scanner;
 
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.javacv.*;
+
+import javax.sound.sampled.*;
 
 public class ScreenRecorder {
 
@@ -19,8 +24,11 @@ public class ScreenRecorder {
     private final Robot robot;
     private final FFmpegFrameRecorder recorder;
     private volatile boolean ended;
+    private final AudioFormat audioFormat;
+    private final DataLine.Info info;
+    private final TargetDataLine line;
 
-    public ScreenRecorder(String videoFileName) throws AWTException {
+    public ScreenRecorder(String videoFileName) throws AWTException, LineUnavailableException {
         this.screenRect = new Rectangle(Toolkit.getDefaultToolkit().getScreenSize());
         this.robot = new Robot();
 
@@ -33,39 +41,20 @@ public class ScreenRecorder {
         this.recorder.setFormat("mp4");
         this.recorder.setVideoCodec(avcodec.AV_CODEC_ID_H264);
         this.recorder.setVideoQuality(0);
-        this.recorder.setFrameRate(30);
+        this.recorder.setFrameRate(60);
         this.recorder.setVideoBitrate(4000 * 1024);
         this.recorder.setGopSize(60);
-    }
 
-    public void start() throws FrameRecorder.Exception, InterruptedException {
-        System.out.println("Starting Record...");
-        ended = false;
-        recorder.start();
-        new Thread(() -> {
-            Scanner sc = new Scanner(System.in);
-            System.out.println("Press 'q' to stop the recording");
-            while (!ended) {
-                String input = sc.nextLine();
-                if (Objects.equals(input, "q")) {
-                    stop();
-                }
-            }
-            sc.close();
-        }).start();
-        while (!ended) {
-            BufferedImage screenCapture = robot.createScreenCapture(screenRect);
-            Frame frame = convertImageToFrame(screenCapture);
-            recorder.record(frame);
-            Thread.sleep(60);
+        this.audioFormat = new AudioFormat(44100, 16, 2, true, true);
+        this.info = new DataLine.Info(TargetDataLine.class, audioFormat);
+        if (!AudioSystem.isLineSupported(info)) {
+            throw new LineUnavailableException("Audio line is not supported");
         }
-        recorder.stop();
-        recorder.release();
-        System.out.println("Recording Ended");
-    }
+        this.line = (TargetDataLine) AudioSystem.getLine(info);
+        this.line.open(audioFormat);
 
-    public void stop() {
-        this.ended = true;
+        this.recorder.setAudioChannels(audioFormat.getChannels());
+        this.recorder.setSampleRate((int) audioFormat.getSampleRate());
     }
 
     private Frame convertImageToFrame(BufferedImage bufferedImage) {
@@ -76,7 +65,57 @@ public class ScreenRecorder {
         return converter.getFrame(convertedImage);
     }
 
-    public static void main(String[] args) throws AWTException, FrameRecorder.Exception, InterruptedException {
+    public void start() throws FrameRecorder.Exception, InterruptedException {
+        System.out.println("Starting Record...");
+        ended = false;
+        recorder.start();
+        line.start();
+        new Thread(() -> {
+            Scanner sc = new Scanner(System.in);
+            System.out.println("Press 'q' to stop the recording");
+            while (!ended) {
+                String input = sc.nextLine();
+                if (Objects.equals(input, "q")) {
+                    this.ended = true;
+                }
+            }
+            sc.close();
+        }).start();
+
+        new Thread(() -> {
+            byte[] audioBuffer = new byte[line.getBufferSize() / 5];
+            ShortBuffer shortBuffer = ShortBuffer.allocate(audioBuffer.length / 2);
+
+            while (!ended) {
+                int bytesRead = line.read(audioBuffer, 0, audioBuffer.length);
+                if (bytesRead > 0) {
+                    shortBuffer.clear();
+                    ByteBuffer.wrap(audioBuffer).order(ByteOrder.BIG_ENDIAN).asShortBuffer().get(shortBuffer.array(), 0, bytesRead / 2);
+                    try {
+                        recorder.recordSamples((int) audioFormat.getSampleRate(), audioFormat.getChannels(), shortBuffer);
+                    } catch (FrameRecorder.Exception e) {
+                        e.printStackTrace();
+                    }0
+                }
+            }
+        }).start();
+
+
+
+        while (!ended) {
+            BufferedImage screenCapture = robot.createScreenCapture(screenRect);
+            Frame frame = convertImageToFrame(screenCapture);
+            recorder.record(frame);
+            Thread.sleep(16);
+        }
+        recorder.stop();
+        recorder.release();
+        line.stop();
+        line.close();
+        System.out.println("Recording Ended");
+    }
+
+    public static void main(String[] args) throws AWTException, FrameRecorder.Exception, InterruptedException, LineUnavailableException {
         Scanner sc = new Scanner(System.in);
         System.out.println("Enter The Name Of The Video: ");
         String name = sc.nextLine();
