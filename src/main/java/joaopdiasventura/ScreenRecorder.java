@@ -40,8 +40,8 @@ public class ScreenRecorder {
         this.recorder = new FFmpegFrameRecorder(videoDirectory + File.separator + videoFileName, screenRect.width, screenRect.height);
         this.recorder.setFormat("mp4");
         this.recorder.setVideoCodec(avcodec.AV_CODEC_ID_H264);
-        this.recorder.setVideoQuality(0);
-        this.recorder.setFrameRate(60);
+        this.recorder.setVideoQuality(10);
+        this.recorder.setFrameRate(30);
         this.recorder.setVideoBitrate(4000 * 1024);
         this.recorder.setGopSize(60);
 
@@ -95,18 +95,15 @@ public class ScreenRecorder {
                         recorder.recordSamples((int) audioFormat.getSampleRate(), audioFormat.getChannels(), shortBuffer);
                     } catch (FrameRecorder.Exception e) {
                         e.printStackTrace();
-                    }0
+                    }
                 }
             }
         }).start();
-
-
 
         while (!ended) {
             BufferedImage screenCapture = robot.createScreenCapture(screenRect);
             Frame frame = convertImageToFrame(screenCapture);
             recorder.record(frame);
-            Thread.sleep(16);
         }
         recorder.stop();
         recorder.release();
